@@ -1,15 +1,22 @@
 import os
 from fastapi import FastAPI
 import requests
+from groq import Groq
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv("Anthropic.env")
-load_dotenv("groq.env")
+load_dotenv()
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
+cliente_ia = Groq(api_key=os.getenv("GROQ_API_KEY"))
 app = FastAPI()
+
+
+class RequestSugestao(BaseModel):
+    jogo: str
+    estilo: str
+    favoritos: list[str] = []       
+    incluir_localizacao: bool = True
+
 
 # Tabela de fraquezas por tipo
 FRAQUEZAS = {
@@ -162,9 +169,8 @@ def buscar_pokemons_jg(nome:str):
         "pokemons": pokemons
     }
 
-@app.post("/analisar-time")
 
-def analisar_time(time: list[str]):
+def logica_analisar_time(time: list[str]):
     contagem_fraquezas = {}
     contagem_vantagens = {}
     tipos_no_time = []
@@ -219,3 +225,60 @@ def analisar_time(time: list[str]):
         "maior_vantagem": max(vantagens_ordenadas, key=vantagens_ordenadas.get) if vantagens_ordenadas else None,
         "detalhes_por_pokemon": detalhes_por_pokemon,
     }
+
+
+
+@app.post("/analisar-time")
+def analisar_time(time: list[str]):
+    return logica_analisar_time(time)
+
+
+
+# Montando o prompt para a IA
+
+def montar_system_prompt():
+    # O que a IA é, quais são as regras, qual o formato de resposta
+  return f"""
+        O que você é:
+        Você é um treinador especialista em Pokémon.
+        
+        Regras:
+        - Você deve montar um time de exatamente 6 Pokémons para o usuário, baseado no jogo que ele quer jogar, no estilo de time que ele deseja e nos pokémons favoritos que ele gostaria de incluir.
+        - O time deve ser balanceado, buscando cobrir as fraquezas dos ginasios e das fases de cada jogo.
+        - Para cada Pokémon escolhido, você deve explicar por que ele se encaixa no estilo pedido, qual o papel dele no time (atacante, tanque, suporte...), recomendar 4 movimentos, um item recomendado e onde encontrar ele no jogo (pode buscar tanto na pokeapi quanto em outras fontes confiáveis, como Bulbapedia, Serebii, Smogon...).
+        - Responda em português e seja direto e objetivo.
+        - O formate a resposta em JSON seguindo o formato do exemplo abaixo, sem adicionar texto extra fora do JSON:
+        Formato de resposta:
+        '{{
+            "time": [
+                {{
+                "pokemon": "nome",
+                "papel": "Atacante físico",
+                "destaques": "Extremamente rápido e poderoso no ataque especial",
+                "movimentos": ["mv1", "mv2", "mv3", "mv4"],
+                "item": "nome do item",
+                "localizacao": "onde encontrar no jogo",
+                "justificativa": "por que este pokemon"
+                }}
+            ],
+            "estrategia_geral": "descrição da estratégia"
+            }}'
+        """
+
+
+def montar_user_prompt(jogo: str, estilo: str, favoritos: list[str], pokemons_disponiveis: list[str]):
+    lista_completa = ', '.join(pokemons_disponiveis)
+    
+    favoritos_str = ', '.join(favoritos) if favoritos else "nenhum"
+    
+    return f"""
+    Jogo: {jogo}
+    Estilo desejado: {estilo}
+    Pokémons favoritos para incluir obrigatoriamente: {favoritos_str}
+    Complete os {6 - len(favoritos)} restantes com as melhores escolhas para o estilo pedido.
+    
+    Pokémons disponíveis neste jogo (escolha APENAS desta lista):
+    {lista_completa}
+    
+    Monte o time seguindo as regras e o formato definidos.
+    """
