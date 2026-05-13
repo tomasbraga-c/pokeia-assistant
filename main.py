@@ -1,5 +1,13 @@
+import os
 from fastapi import FastAPI
 import requests
+from dotenv import load_dotenv
+
+load_dotenv("Anthropic.env")
+load_dotenv("groq.env")
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 app = FastAPI()
 
