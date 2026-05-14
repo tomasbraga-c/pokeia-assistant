@@ -1,9 +1,11 @@
 import os
 from fastapi import FastAPI
 import requests
+import json
 from groq import Groq
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
 
 load_dotenv()
 
@@ -16,6 +18,7 @@ class RequestSugestao(BaseModel):
     estilo: str
     favoritos: list[str] = []       
     incluir_localizacao: bool = True
+    incluir_lendarios: bool = False
 
 
 # Tabela de fraquezas por tipo
@@ -217,8 +220,6 @@ def logica_analisar_time(time: list[str]):
     vantagens_ordenadas = dict(sorted(contagem_vantagens.items(), key=lambda x: x[1], reverse=True))
 
     return {
-        "time": time,
-        "tipos_no_time": list(set(tipos_no_time)),
         "fraquezas_do_time": fraquezas_ordenadas,
         "maior_fraqueza": max(fraquezas_ordenadas, key=fraquezas_ordenadas.get) if fraquezas_ordenadas else None,
         "vantagens_do_time": vantagens_ordenadas,
@@ -247,6 +248,13 @@ def montar_system_prompt():
         - O time deve ser balanceado, buscando cobrir as fraquezas dos ginasios e das fases de cada jogo.
         - Para cada Pokémon escolhido, você deve explicar por que ele se encaixa no estilo pedido, qual o papel dele no time (atacante, tanque, suporte...), recomendar 4 movimentos, um item recomendado e onde encontrar ele no jogo (pode buscar tanto na pokeapi quanto em outras fontes confiáveis, como Bulbapedia, Serebii, Smogon...).
         - Responda em português e seja direto e objetivo.
+        - O jogador só pode ter UM pokémon inicial no time. Nunca inclua dois ou mais dos três iniciais do jogo.
+        - EXCEÇÃO: Nos jogos "let's-go-pikachu" e "let's-go-eevee" os três iniciais 
+        (Bulbasaur, Charmander e Squirtle) podem ser obtidos como presente de NPC 
+        durante o jogo, portanto podem aparecer juntos no time. Nestes jogos o 
+        inicial obrigatório já está definido pelo título: Pikachu em "let's-go-pikachu" 
+        e Eevee(Que não evolui) em "let's-go-eevee".
+        - O campo "estilo" é uma restrição OBRIGATÓRIA e deve ser seguida acima de qualquer outra consideração, inclusive balanceamento. Se o usuário pedir "apenas formas base", NENHUM Pokémon evoluído pode aparecer no time, sem exceções. Se pedir "apenas tipo fogo", todos os 6 devem ser do tipo fogo. O estilo do usuário é lei — não sugira algo "melhor" se não foi pedido.
         - O formate a resposta em JSON seguindo o formato do exemplo abaixo, sem adicionar texto extra fora do JSON:
         Formato de resposta:
         '{{
@@ -282,3 +290,52 @@ def montar_user_prompt(jogo: str, estilo: str, favoritos: list[str], pokemons_di
     
     Monte o time seguindo as regras e o formato definidos.
     """
+
+# Rota para sugerir o time de acordo com os prompts e a resposta da IA
+
+@app.post("/sugerir-time")
+def sugerir_time(request: RequestSugestao):
+    try:
+        jogo_existente = buscar_jogo(request.jogo)
+        if "erro" in jogo_existente:
+            raise HTTPException(
+                status_code=404,
+                detail="Jogo não encontrado. Tente usar apenas o final do nome, ex: 'red', 'x', 'sword', 'scarlet'..."
+            )
+            
+        pokemons_disponiveis = buscar_pokemons_jg(request.jogo)["pokemons"]
+
+        resposta_ia = cliente_ia.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": montar_system_prompt()},
+                {"role": "user", "content": montar_user_prompt(request.jogo, request.estilo, request.favoritos, pokemons_disponiveis)}
+            ],
+            max_tokens=2300,
+            temperature=0.7,
+            response_format={"type": "json_object"}
+            
+        )
+        texto_resposta = resposta_ia.choices[0].message.content
+
+        dados_ia = json.loads(texto_resposta)
+        nomes_time = [p["pokemon"] for p in dados_ia["time"]]
+        analise_time_gerado = logica_analisar_time(nomes_time)
+        for i, pokemon in enumerate(dados_ia["time"]):
+           pokemon["tipos"] = analise_time_gerado["detalhes_por_pokemon"][i]["tipos"]
+
+        return {
+        "time_sugerido": dados_ia,
+        "analise": {
+            "maior_fraqueza": analise_time_gerado["maior_fraqueza"],
+            "maior_vantagem": analise_time_gerado["maior_vantagem"],
+            "fraquezas_do_time": analise_time_gerado["fraquezas_do_time"],
+            "vantagens_do_time": analise_time_gerado["vantagens_do_time"],
+        }
+    }
+    except HTTPException:
+        raise  
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
