@@ -581,6 +581,8 @@ def buscar_localizacao(nome_pokemon: str, jogo: str):
             "evolucao": "Não disponível"
         }
 
+############################################################
+
 def _buscar_localizacao(nome_pokemon: str, jogo: str):
     def buscar_na_cadeia(no, nome_alvo, caminho=[]):
         nome_atual = no["species"]["name"]
@@ -634,3 +636,62 @@ def _buscar_localizacao(nome_pokemon: str, jogo: str):
     "localizacao": localizacao_str,
     "evolucao": condicoes if condicoes else "Não precisa evoluir"
     }
+
+############################################################
+
+# Endpoint para comparar dois times
+
+class RequestCompararTimes(BaseModel):
+    time_a: list[str] 
+    time_b: list[str] 
+
+def logica_comparar_times(time_a, time_b):
+    matchups = []  
+
+    for pokemon_b in time_b:
+        
+        resposta_b = requests.get(f"https://pokeapi.co/api/v2/pokemon/{pokemon_b.lower()}").json()
+        tipos_b = [t["type"]["name"] for t in resposta_b["types"]]
+
+        
+        fraquezas_b = []
+        for tipo in tipos_b:
+            for f in FRAQUEZAS.get(tipo, []):
+                if f not in fraquezas_b:
+                    fraquezas_b.append(f)
+
+        
+        melhor_counter = None
+        melhor_score = 0
+
+        for pokemon_a in time_a:
+            
+            resposta_a = requests.get(f"https://pokeapi.co/api/v2/pokemon/{pokemon_a.lower()}").json()
+            tipos_a = [t["type"]["name"] for t in resposta_a["types"]]
+
+            # Conta quantos tipos do pokemon_a batem nas fraquezas do pokemon_b
+            score = 0
+            for tipo in tipos_a:
+                if tipo in fraquezas_b:
+                    score += 1
+
+            
+            if score > melhor_score:
+                melhor_score = score
+                melhor_counter = pokemon_a
+
+        
+        matchups.append({
+            "adversario": pokemon_b,
+            "tipos_adversario": tipos_b,
+            "fraquezas_adversario": fraquezas_b,
+            "counter": melhor_counter if melhor_counter else "sem counter claro",
+            "score": melhor_score
+        })
+
+    return {"matchups": matchups}
+    
+    
+@app.post("/comparar-times")
+def comparar_times(request: RequestCompararTimes):
+    return logica_comparar_times(request.time_a, request.time_b)
