@@ -661,8 +661,7 @@ def logica_comparar_times(time_a, time_b):
                     fraquezas_b.append(f)
 
         
-        melhor_counter = None
-        melhor_score = 0
+        scores = {}
 
         for pokemon_a in time_a:
             
@@ -674,24 +673,20 @@ def logica_comparar_times(time_a, time_b):
             for tipo in tipos_a:
                 if tipo in fraquezas_b:
                     score += 1
+            scores[pokemon_a] = score
 
-            
-            if score > melhor_score:
-                melhor_score = score
-                melhor_counter = pokemon_a
-
-        
+        top_counters = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]
+        top_counters = [{"pokemon": p, "score": s} for p, s in top_counters if s > 0]
         matchups.append({
             "adversario": pokemon_b,
             "tipos_adversario": tipos_b,
             "fraquezas_adversario": fraquezas_b,
-            "counter": melhor_counter if melhor_counter else "sem counter claro",
-            "score": melhor_score
+            "counters": top_counters if top_counters else [{"pokemon": "sem counter claro", "score": 0}]
         })
-
     return {"matchups": matchups}
     
     
 @app.post("/comparar-times")
 def comparar_times(request: RequestCompararTimes):
     return logica_comparar_times(request.time_a, request.time_b)
+
