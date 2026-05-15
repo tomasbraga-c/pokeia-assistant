@@ -295,8 +295,9 @@ def logica_analisar_time(time: list[str]):
         
         dados = resposta.json()
         tipos = [t["type"]["name"] for t in dados["types"]]
+        
+        tipos_no_time = []
         tipos_no_time.extend(tipos)
-
 
         fraquezas_pokemon = []
         vantagens_pokemon = []
@@ -645,6 +646,8 @@ class RequestCompararTimes(BaseModel):
     time_a: list[str] 
     time_b: list[str] 
 
+#############################################################
+
 def logica_comparar_times(time_a, time_b):
     matchups = []  
 
@@ -685,8 +688,155 @@ def logica_comparar_times(time_a, time_b):
         })
     return {"matchups": matchups}
     
-    
+
+#############################################################
+
 @app.post("/comparar-times")
 def comparar_times(request: RequestCompararTimes):
     return logica_comparar_times(request.time_a, request.time_b)
 
+############################################################
+
+
+# Implementando chat conversacional para ajudar o usuário a montar o time
+
+
+class MensagemChat(BaseModel):
+    role: str 
+    content: str
+
+class RequestChat(BaseModel):
+    jogo: str                        
+    mensagens: list[MensagemChat]   
+    incluir_lendarios: bool = False  
+    incluir_localizacao: bool = True 
+     
+
+
+def montar_prompt_chat():
+    return """
+    O que você é:
+    Você é um treinador muito experiente em Pokémon e vai ajudar o usuário a montar o melhor time possível através de uma conversa progressiva.
+
+    REGRAS DA CONVERSA:
+    - Faça UMA pergunta por vez, de forma clara e objetiva
+    - O jogo já foi informado pelo sistema — NUNCA pergunte sobre isso
+    - Lendários já foram configurados pelo sistema — NUNCA pergunte sobre isso
+    - Se após 4 perguntas ainda não tiver todas as informações, sugira o time com o que tiver
+
+    O que você PRECISA descobrir (nesta ordem):
+    1) Estilo de time
+    2) Pokémons favoritos
+    3) Se o favorito não for um inicial, pergunte qual inicial ele quer no time
+    4) UMA preferência extra (tipo, velocidade, resistência etc)
+
+    REGRA CRÍTICA DE SUGESTÃO:
+    - Após as 4 perguntas acima, sugira o time IMEDIATAMENTE com [SUGERIR_TIME]
+    - NÃO faça perguntas adicionais após a preferência extra
+    - Se o usuário disser "pode escolher", "tanto faz" ou "sem preferência" em qualquer momento, sugira imediatamente
+
+    REGRAS DO TIME:
+    - O jogador só pode ter UM Pokémon inicial — os iniciais do jogo serão informados pelo sistema
+    - NUNCA inclua dois ou mais iniciais do mesmo jogo
+    - Para formas regionais use SEMPRE o formato da PokéAPI: nome-região (ex: ninetales-alola, slowpoke-galar). NUNCA use alolan-nome ou galarian-nome
+    - Os nomes dos Pokémons devem ser escritos EXATAMENTE como na lista de disponíveis
+    - O estilo do usuário é lei — siga acima de qualquer outra consideração
+    - NUNCA inclua dois Pokémons da mesma linha evolutiva no time
+    - Todos os nomes devem ser em letras minúsculas
+    - Antes do [SUGERIR_TIME] escreva uma mensagem de encerramento para o usuário, algo como "Ótimo, com base no que conversamos, aqui está o time que montei para você:" ou "Perfeito! Aqui está o time que sugiro para você:".
+    - SEMPRE sugira a forma final da linha evolutiva, nunca formas intermediárias. Exemplo: sugira Alakazam, não Kadabra. Sugira Gengar, não Haunter. Exceções: se o usuário pedir explicitamente uma forma específica.
+
+    QUANDO SUGERIR O TIME:
+    Use a tag [SUGERIR_TIME] e inclua imediatamente abaixo o JSON neste formato exato, sem texto antes ou depois do JSON:
+
+    [SUGERIR_TIME]
+    {
+        "time": [
+            {
+                "pokemon": "nome exato da lista",
+                "papel": "Atacante físico",
+                "destaques": "característica principal",
+                "movimentos": ["mv1", "mv2", "mv3", "mv4"],
+                "item": "nome do item",
+                "justificativa": "por que este pokemon"
+            }
+        ],
+        "estrategia_geral": "descrição da estratégia"
+    }
+
+    Responda sempre em português e seja direto e objetivo.
+    """
+
+
+@app.post("/chat")
+def chat(request: RequestChat):
+    try:
+       jogo_escolhido = buscar_jogo(request.jogo)
+       if "erro" in jogo_escolhido:
+            raise HTTPException(
+                status_code=404,
+                detail="Jogo não encontrado. Tente usar apenas o final do nome, ex: 'red', 'x', 'sword', 'scarlet'..."
+            )
+       
+       pokemons_no_jogo = buscar_pokemons_jg(request.jogo)["pokemons"]
+       iniciais_presentes = INICIAIS_POR_JOGO.get(request.jogo.lower(), None)
+       
+       iniciais_str = ', '.join(iniciais_presentes) if iniciais_presentes else "use seu conhecimento"
+
+       mensagem = [
+           {"role": "system", "content": montar_prompt_chat()},
+       ]
+
+       mensagem += [
+           {"role": "user", "content": f"Jogo: {request.jogo} | Pokémons disponíveis: {', '.join(pokemons_no_jogo)} | Iniciais: {iniciais_str} | Lendários: {request.incluir_lendarios} | Localização: {request.incluir_localizacao}"},
+           {"role": "assistant", "content": "Entendido! Vou ajudar a montar o melhor time."}
+       ]
+
+       mensagem += [
+           {"role": m.role, "content": m.content} for m in request.mensagens
+       ]
+       
+       resposta_ia = cliente_ia.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=mensagem,
+            max_tokens=2300,
+            temperature=0.7
+            # sem response_format!
+        )
+       
+       texto_resposta = resposta_ia.choices[0].message.content
+       
+       if "[SUGERIR_TIME]" in texto_resposta:
+           json_str = texto_resposta.split("[SUGERIR_TIME]")[1].strip()
+           dados_ia = json.loads(json_str)
+           nomes_time = [p["pokemon"] for p in dados_ia["time"]]
+           analise = logica_analisar_time(nomes_time)
+           
+           for i, pokemon in enumerate(dados_ia["time"]):
+            pokemon["tipos"] = analise["detalhes_por_pokemon"][i]["tipos"]
+            if request.incluir_localizacao:
+                pokemon["localizacao"] = buscar_localizacao(pokemon["pokemon"], request.jogo)
+
+           return {
+               "finalizado": True,
+               "mensagem": texto_resposta.split("[SUGERIR_TIME]")[0].strip(),
+               "time_sugerido": dados_ia,
+               "analise": {
+                   "maior_fraqueza": analise["maior_fraqueza"],
+                   "maior_vantagem": analise["maior_vantagem"],
+                   "fraquezas_do_time": analise["fraquezas_do_time"],
+                   "vantagens_do_time": analise["vantagens_do_time"],
+                    }
+              }
+                      
+       else:
+           return {
+                "finalizado": False,
+                "mensagem": texto_resposta
+                }
+
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
