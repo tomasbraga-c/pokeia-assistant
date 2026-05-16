@@ -9,6 +9,8 @@ function Navbar() {
       
       <NavLink to="/" className="text-base font-medium flex items-center gap-2 text-white">
         PokeIA
+        <img src="/logo.png" alt="logo" className="w-6 h-6 invert" />
+        
       </NavLink>
 
       <div className="flex gap-1">
