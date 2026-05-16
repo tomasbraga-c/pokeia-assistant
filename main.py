@@ -6,12 +6,20 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from difflib import get_close_matches
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 cliente_ia = Groq(api_key=os.getenv("GROQ_API_KEY"))
 app = FastAPI()
 
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class RequestSugestao(BaseModel):
     jogo: str
@@ -312,6 +320,7 @@ def logica_analisar_time(time: list[str]):
 
         detalhes_por_pokemon.append({
             "pokemon": nome_pokemon.lower(),
+            "id": dados["id"],  # ← adiciona isso
             "tipos": tipos,
             "fraquezas": fraquezas_pokemon,
             "vantagens": vantagens_pokemon,
@@ -361,6 +370,9 @@ def montar_system_prompt():
         - Para formas regionais, use SEMPRE o formato da PokéAPI: nome-região (ex: ninetales-alola, slowpoke-galar, zoroark-hisui). NUNCA use o formato alolan-nome, galarian-nome ou hisuian-nome.
         - Use EXATAMENTE os nomes da lista de Pokémons disponíveis fornecida.
         - REGRA ABSOLUTA DE INICIAIS: Em cada jogo, o jogador só pode obter UM Pokémon inicial. A lista de iniciais do jogo será fornecida. Você DEVE incluir NO MÁXIMO UM deles no time. Incluir dois ou mais iniciais do mesmo jogo é fisicamente impossível no jogo e torna a resposta completamente inválida.
+        - SEGUNDA REGRA ABSOLUTA: SEMPRE use a forma FINAL da linha evolutiva. Nunca sugira formas intermediárias como Fletchinder (use Talonflame), Haunter (use Gengar), Kadabra (use Alakazam), Charmeleon (use Charizard). Se não tiver certeza se é a forma final, escolha outro Pokémon.
+        - REGRA IMPORTANTE: Evite sugerir pokemons com mesmo tipo principal para não ter um time com fraquezas muito concentradas. Se o usuário pedir um estilo específico que leve a isso, aceite.
+        - Se solicitar Megas evoluções eu quero que me mande a forma mega do pokemon.
         - O formate a resposta em JSON seguindo o formato do exemplo abaixo, sem adicionar texto extra fora do JSON:
         Formato de resposta:
         '{{
@@ -514,6 +526,7 @@ def sugerir_time(request: RequestSugestao):
 
         for i, pokemon in enumerate(dados_ia["time"]):
             pokemon["tipos"] = analise_time_gerado["detalhes_por_pokemon"][i]["tipos"]
+            pokemon["id"] = analise_time_gerado["detalhes_por_pokemon"][i]["id"]
 
             if request.incluir_localizacao:
                 loc = buscar_localizacao(pokemon["pokemon"], request.jogo)
